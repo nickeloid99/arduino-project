@@ -1,0 +1,139 @@
+// 라이브러리 및 헤더 설정
+#include <LiquidCrystal_I2C.h>
+#include "DHT.h" // DHT11 대신 DHT 헤더 파일 추가
+#include <MFRC522DriverPinSimple.h>
+#include <MFRC522DriverSPI.h>
+#include <MFRC522v2.h>
+#include <MFRC522Debug.h>
+#include <Servo.h>
+
+// Servo 모터 객체 선언
+Servo servo;
+
+// 센서 핀 정의
+const uint8_t TEMP_HUMID_PIN = A1;
+const uint8_t SERVO_PIN = 2; 
+const uint8_t LIGHT_PIN = A2; // 조도 센서 핀
+const uint8_t WATER_SENSOR = A3;
+const uint16_t BUZZER_PIN = A4;
+const uint8_t PIR_SENSOR = 3; 
+const uint8_t LED = A0;
+const String MASTER_CARD_UID = "F493DD2A";
+
+// MFRC522 모듈 관련 객체 선언
+class MFRC522DriverPinSimple sda_pin(53);
+class MFRC522DriverSPI driver {sda_pin};
+class MFRC522 mfrc522{driver};
+
+// DHT11 센서 객체 생성
+DHT dht(TEMP_HUMID_PIN, DHT11);
+
+// LCD 설정
+LiquidCrystal_I2C lcd(0x27, 16, 2); // 주소와 화면 크기에 맞게 수정
+
+// PIR 센서 관련 변수 선언
+bool pir_state {false};
+uint16_t sensing_count {0u};
+
+// 센서 입출력 설정
+void setup() {
+  Serial.begin(115200); // 시리얼 통신 초기화
+  Serial1.begin(9600);
+  mfrc522.PCD_Init(); // MFRC522 모듈 초기화
+  servo.attach(SERVO_PIN); // 서보 모터 핀 설정
+  pinMode(PIR_SENSOR, INPUT); // PIR 센서 핀 입력으로 설정
+  pinMode(WATER_SENSOR, INPUT); // 물 센서 핀 입력으로 설정
+  pinMode(SERVO_PIN, OUTPUT); // 서보 모터 핀 출력으로 설정
+  pinMode(BUZZER_PIN, OUTPUT); // 버저 핀 출력으로 설정
+  pinMode(LED, OUTPUT); // LED 핀 출력으로 설정
+  dht.begin(); // DHT11 센서 초기화
+  lcd.init(); // LCD 초기화
+  lcd.backlight(); // LCD 백라이트 활성화
+}
+
+// 메인 루프
+void loop() {
+  // RFID 모듈로부터 카드 읽기
+  if (!mfrc522.PICC_IsNewCardPresent()) return;
+  if (!mfrc522.PICC_ReadCardSerial()) return;
+  
+  String tagID = ""; // 카드 ID 저장할 변수
+  for (uint8_t i {0U}; i < 4; ++i) {
+    tagID += String(mfrc522.uid.uidByte[i], HEX);
+  }
+  tagID.toUpperCase(); // 카드 ID를 대문자로 변환
+  mfrc522.PICC_HaltA(); // 카드 읽기 종료
+  
+  // 마스터 카드인 경우 서보 모터 회전
+  if (tagID == MASTER_CARD_UID) {
+    servo.write(135); // 서보 모터 각도 설정
+    delay(1000); // 1초 대기
+    servo.write(0); // 서보 모터 초기 위치로 움직임
+    delay(1000); // 1초 대기
+  }
+  
+  // DHT11 센서로부터 온습도 읽어 LCD에 출력
+  if(dht.read()){
+    float temperature = dht.readTemperature(); // 온도 읽기
+    lcd.clear(); // LCD 화면 지우기
+    lcd.setCursor(0, 0); // 첫 번째 줄에 커서 위치
+    lcd.print("온도: "); // 온도 텍스트 출력
+    lcd.print(temperature); // 온도 값 출력
+    float humidity =  dht.readHumidity(); // 습도 읽기
+    lcd.setCursor(0,1); // 두 번째 줄에 커서 위치
+    lcd.print("습도: "); // 습도 텍스트 출력
+    lcd.print(humidity); // 습도 값 출력
+    delay(500); // 0.5초 대기
+  }
+  
+  // 수위 센서 값 읽기
+  uint16_t water_value = analogRead(WATER_SENSOR);
+  Serial.print(F("Water level: "));
+  Serial.println(water_value);
+  // 수위가 일정 범위 내에 있을 때 버저 울림
+  if(20<water_value and water_value<200)
+  {
+    for(int i {0}; i<3; ++i)
+    {
+      for(int pwm{0}; pwm <256; pwm+=10)
+      {
+        digitalWrite(BUZZER_PIN, HIGH);
+        delay(10);
+      } 
+       
+      for(int pwm{255}; pwm >=0; pwm-=10)
+      {
+        digitalWrite(BUZZER_PIN, LOW);
+        delay(10);
+      }
+      Serial.print(F("Water VALUE :"));
+      Serial.println(water_value);
+    }
+  }
+  
+  // 조도 센서 값 읽기
+  uint16_t light_value = analogRead(LIGHT_PIN);
+  Serial.print(F("LIGHT VALUE: "));
+  Serial.println(light_value);
+  // 주변 밝기에 따라 LED 제어
+  if (light_value > 100) { 
+    digitalWrite(LED, HIGH); // LED 켜기
+  } else {    
+    digitalWrite(LED, LOW); // LED 끄기
+  }
+  
+  // PIR 센서로 인체 감지 여부 확인
+  bool detect =digitalRead(PIR_SENSOR);
+  delay(10UL); // 10밀리초 대기
+  if(detect){
+    if(!pir_state){
+      pir_state = true;
+      Serial.println(F("detect human")); // 인체 감지 메시지 출력
+      digitalWrite(LED, HIGH); // LED 켜기
+      delay(1000UL); // 1초 대기
+    }
+  } else{
+    digitalWrite(LED, LOW); // LED 끄기
+    pir_state = false;
+  }
+}
